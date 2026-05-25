@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <title>Lector de QR - Asistencia</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="assets/css/styles.css" />
+</head>
+<body>
+<script>
+  const session = JSON.parse(sessionStorage.getItem('saludMentalSession_v1') || 'null');
+  if (!session || session.role !== 'psicologo') {
+    alert('Acceso no autorizado');
+    window.location.href = 'login.html';
+  }
+</script>
+
+<main class="card" style="max-width:820px;margin:2rem auto;">
+  <a href="psicologo/dashboard.html" class="btn ghost" style="margin-bottom:1rem;display:inline-flex;">← Regresar al sistema</a>
+
+  <h1>Registro de asistencia por QR</h1>
+  <p>Selecciona la plática y escanea el código QR del alumno. Cada código leído se guarda y puede verse en el resumen final.</p>
+
+  <div class="field">
+    <label for="platicaManual">Plática manual</label>
+    <input type="text" id="platicaManual" placeholder="Escribe el nombre de la plática" autocomplete="off" />
+  </div>
+
+  <div id="reader" style="width:100%;max-width:420px;margin:1rem 0;"></div>
+  <div id="resultado" class="empty" style="margin-top:1rem;">Esperando lectura del código QR.</div>
+
+  <section id="resumenAsistencias" style="margin-top:1.5rem;"></section>
+
+  <div class="actions" style="margin-top:1rem;">
+    <button id="btnLeerOtro" class="btn primary" type="button">Leer otro código</button>
+    <button id="btnLimpiarLecturas" class="btn ghost" type="button">Limpiar lecturas</button>
+  </div>
+</main>
+
+<script src="https://unpkg.com/html5-qrcode"></script>
+<script>
+  const ASISTENCIAS_KEY = 'asistencias';
+
+  let html5QrCode = null;
+  let escaneando = false;
+
+  const lector = document.getElementById('reader');
+  const resultado = document.getElementById('resultado');
+  const resumen = document.getElementById('resumenAsistencias');
+  const inputPlatica = document.getElementById('platicaManual');
+  const btnLeerOtro = document.getElementById('btnLeerOtro');
+  const btnLimpiarLecturas = document.getElementById('btnLimpiarLecturas');
+
+  function obtenerAsistencias() {
+    return JSON.parse(localStorage.getItem(ASISTENCIAS_KEY) || '[]');
+  }
+
+  function guardarAsistencias(asistencias) {
+    localStorage.setItem(ASISTENCIAS_KEY, JSON.stringify(asistencias));
+  }
+
+  function escaparHTML(valor) {
+    return String(valor || '')
+      .replaceAll('&', '&amp;')
+      .replaceAll('<', '&lt;')
+      .replaceAll('>', '&gt;')
+      .replaceAll('"', '&quot;')
+      .replaceAll("'", '&#039;');
+  }
+
+  function formatearFecha(valor) {
+    if (!valor) return new Date().toLocaleString('es-MX');
+    const fecha = new Date(valor);
+    if (Number.isNaN(fecha.getTime())) return String(valor);
+    return fecha.toLocaleString('es-MX');
+  }
+
+  function mostrarResumen() {
+    const asistencias = obtenerAsistencias();
+
+    if (!resumen) return;
+
+    if (!asistencias.length) {
+      resumen.innerHTML = `
+        <h2>Resumen de asistencias</h2>
+        <p><strong>Total registrado:</strong> 0</p>
+        <div class="empty">No hay asistencias registradas.</div>
+      `;
+      return;
+    }
+
+    const filas = asistencias.map((asistencia, index) => `
+      <tr>
+        <td>${index + 1}</td>
+        <td>${escaparHTML(asistencia.nombre)}</td>
+        <td>${escaparHTML(asistencia.matricula)}</td>
+        <td>${escaparHTML(asistencia.grupo)}</td>
+        <td>${escaparHTML(asistencia.platica)}</td>
+        <td>${escaparHTML(formatearFecha(asistencia.fecha))}</td>
+      </tr>
+    `).join('');
+
+    resumen.innerHTML = `
+      <h2>Resumen de asistencias</h2>
+      <p><strong>Total registrado:</strong> ${asistencias.length}</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Alumno</th>
+              <th>Matrícula</th>
+              <th>Grupo</th>
+              <th>Plática</th>
+              <th>Fecha</th>
+            </tr>
+          </thead>
+          <tbody>${filas}</tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  function validarDatosQR(data) {
+    const tipoValido = data && (data.tipo === 'usuario' || data.tipo === 'asistencia');
+    const idValido = data && (data.usuarioId || data.pacienteId);
+    return tipoValido && idValido && data.nombre;
+  }
+
+  function registrarAsistencia(data) {
+    const platicaManual = inputPlatica.value.trim();
+
+    if (!platicaManual) {
+      resultado.className = 'notice unread';
+      resultado.innerHTML = '<strong>Falta la plática</strong><p>Escribe el nombre de la plática antes de leer el QR.</p>';
+      iniciarLector();
+      return;
+    }
+
+    const asistencias = obtenerAsistencias();
+    const usuarioId = data.usuarioId || data.pacienteId;
+
+    const yaRegistrado = asistencias.some(asistencia =>
+      String(asistencia.pacienteId || asistencia.usuarioId || '') === String(usuarioId) &&
+      String(asistencia.platica || '').trim().toLowerCase() === platicaManual.toLowerCase()
+    );
+
+    if (yaRegistrado) {
+      resultado.className = 'notice unread';
+      resultado.innerHTML = `
+        <strong>Asistencia duplicada</strong>
+        <p>${escaparHTML(data.nombre)} ya está registrado en la plática: ${escaparHTML(platicaManual)}.</p>
+      `;
+      mostrarResumen();
+      return;
+    }
+
+    const asistencia = {
+      pacienteId: usuarioId,
+      usuarioId: usuarioId,
+      nombre: data.nombre || '',
+      correo: data.correo || data.email || '',
+      matricula: data.matricula || '',
+      carrera: data.carrera || '',
+      grupo: data.grupo || '',
+      semestre: data.semestre || '',
+      tutor: data.tutor || '',
+      platicaId: data.platicaId || '',
+      platica: platicaManual,
+      fecha: new Date().toISOString(),
+      registradoPor: session ? session.name : ''
+    };
+
+    asistencias.push(asistencia);
+    guardarAsistencias(asistencias);
+    mostrarResumen();
+
+    resultado.className = 'notice unread';
+    resultado.innerHTML = `
+      <strong>Asistencia registrada</strong>
+      <p>Alumno: ${escaparHTML(asistencia.nombre)}<br>
+      Matrícula: ${escaparHTML(asistencia.matricula || 'Sin matrícula')}<br>
+      Plática: ${escaparHTML(asistencia.platica)}</p>
+    `;
+  }
+
+  function procesarQR(textoQR) {
+    try {
+      const data = JSON.parse(textoQR);
+
+      if (!validarDatosQR(data)) {
+        resultado.className = 'notice unread';
+        resultado.innerHTML = '<strong>QR inválido</strong><p>El código leído no corresponde a un alumno válido.</p>';
+        return;
+      }
+
+      registrarAsistencia(data);
+    } catch (error) {
+      resultado.className = 'notice unread';
+      resultado.innerHTML = '<strong>Error de lectura</strong><p>No se pudo interpretar la información del código QR.</p>';
+    }
+  }
+
+  async function detenerLector() {
+    if (!html5QrCode || !escaneando) return;
+
+    try {
+      await html5QrCode.stop();
+      html5QrCode.clear();
+    } catch (error) {
+      console.warn('No se pudo detener el lector QR:', error);
+    } finally {
+      escaneando = false;
+    }
+  }
+
+  async function iniciarLector() {
+    if (!lector || typeof Html5Qrcode === 'undefined') {
+      resultado.className = 'notice unread';
+      resultado.innerHTML = '<strong>Error</strong><p>No se cargó la librería para leer códigos QR.</p>';
+      return;
+    }
+
+    await detenerLector();
+    lector.innerHTML = '';
+    html5QrCode = new Html5Qrcode('reader');
+
+    try {
+      await html5QrCode.start(
+        { facingMode: 'environment' },
+        { fps: 10, qrbox: { width: 250, height: 250 } },
+        async textoQR => {
+          await detenerLector();
+          procesarQR(textoQR);
+        }
+      );
+      escaneando = true;
+      if (resultado.classList.contains('empty')) {
+        resultado.textContent = 'Esperando lectura del código QR.';
+      }
+    } catch (error) {
+      escaneando = false;
+      resultado.className = 'notice unread';
+      resultado.innerHTML = `
+        <strong>Error</strong>
+        <p>No se pudo abrir la cámara. Revisa permisos o abre el sistema desde <strong>localhost</strong>.</p>
+      `;
+    }
+  }
+
+  btnLeerOtro.addEventListener('click', () => {
+    resultado.className = 'empty';
+    resultado.textContent = 'Esperando lectura del código QR.';
+    iniciarLector();
+  });
+
+  btnLimpiarLecturas.addEventListener('click', async () => {
+    const confirmar = confirm('¿Deseas limpiar todas las lecturas registradas?');
+    if (!confirmar) return;
+
+    localStorage.removeItem(ASISTENCIAS_KEY);
+    mostrarResumen();
+    resultado.className = 'empty';
+    resultado.textContent = 'Lecturas limpiadas. Puedes leer otro código.';
+    await iniciarLector();
+  });
+
+  document.addEventListener('DOMContentLoaded', () => {
+    mostrarResumen();
+    iniciarLector();
+  });
+</script>
+</body>
+</html>
