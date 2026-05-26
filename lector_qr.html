@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+  <meta charset="UTF-8" />
+  <title>Lector de QR - Asistencia</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="assets/css/styles.css" />
+</head>
+
+<body>
+  <script>
+    const session = JSON.parse(sessionStorage.getItem('saludMentalSession_v1') || 'null');
+    if (!session || session.role !== 'psicologo') {
+      alert('Acceso no autorizado');
+      window.location.href = 'login.html';
+    }
+
+    const temaGuardado = localStorage.getItem('saludMentalTheme') || 'light';
+    if (temaGuardado === 'dark') {
+      document.body.classList.add('dark-mode');
+    }
+  </script>
+
+  <main class="card" style="max-width:980px;margin:2rem auto;">
+    <a href="psicologo/dashboard.html" class="btn ghost" style="margin-bottom:1rem;display:inline-flex;">← Regresar al
+      sistema</a>
+
+    <div class="section-head">
+      <div>
+        <h1>Registro de asistencia por QR</h1>
+        <p>Selecciona una plática creada en el sistema y escanea el código QR del alumno. La lista combina alumnos
+          registrados desde Pláticas y alumnos confirmados por lectura QR.</p>
+      </div>
+    </div>
+
+    <div class="field">
+      <label for="platicaSelect">Plática disponible</label>
+      <select id="platicaSelect" class="combo-box"></select>
+      <p class="helper">Las opciones se toman automáticamente del módulo Pláticas.</p>
+    </div>
+
+    <div id="reader" style="width:100%;max-width:420px;margin:1rem 0;"></div>
+    <div id="resultado" class="empty" style="margin-top:1rem;">Esperando lectura del código QR.</div>
+
+    <section id="resumenAsistencias" style="margin-top:1.5rem;"></section>
+
+    <div class="actions" style="margin-top:1rem;">
+      <button id="btnLeerOtro" class="btn primary" type="button">Leer otro código</button>
+      <button id="btnExportarExcel" class="btn secondary" type="button">Generar Excel</button>
+      <button id="btnLimpiarLecturas" class="btn ghost" type="button">Limpiar lecturas QR</button>
+    </div>
+  </main>
+
+  <script src="assets/js/config.js"></script>
+  <script src="https://unpkg.com/html5-qrcode"></script>
+  <script>
+    const APP_KEY = 'saludMentalDemoDB_v3';
+    const ASISTENCIAS_KEY = 'asistencias';
+    const SELECTED_TALK_KEY = 'lectorQRSelectedTalkId';
+
+    let html5QrCode = null;
+    let escaneando = false;
+
+    const lector = document.getElementById('reader');
+    const resultado = document.getElementById('resultado');
+    const resumen = document.getElementById('resumenAsistencias');
+    const selectPlatica = document.getElementById('platicaSelect');
+    const btnLeerOtro = document.getElementById('btnLeerOtro');
+    const btnLimpiarLecturas = document.getElementById('btnLimpiarLecturas');
+    const btnExportarExcel = document.getElementById('btnExportarExcel');
+
+    function obtenerDB() {
+      return JSON.parse(localStorage.getItem(APP_KEY) || '{}');
+    }
+
+    function guardarDB(db) {
+      localStorage.setItem(APP_KEY, JSON.stringify(db));
+    }
+
+    function obtenerAsistencias() {
+      return JSON.parse(localStorage.getItem(ASISTENCIAS_KEY) || '[]');
+    }
+
+    function guardarAsistencias(asistencias) {
+      localStorage.setItem(ASISTENCIAS_KEY, JSON.stringify(asistencias));
+    }
+
+    function escaparHTML(valor) {
+      return String(valor ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+    }
+
+    function normalizarTexto(valor) {
+      return String(valor || '')
+        .trim()
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '');
+    }
+
+    function formatearFecha(valor) {
+      if (!valor) return '';
+      const fecha = new Date(valor);
+      if (Number.isNaN(fecha.getTime())) return String(valor);
+      return fecha.toLocaleString('es-MX');
+    }
+
+    function obtenerUsuarioPorId(db, id) {
+      return (db.users || []).find(user => String(user.id) === String(id));
+    }
+
+    function obtenerPlaticas() {
+      const db = obtenerDB();
+      return (db.talks || []).slice().sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')));
+    }
+
+    function obtenerPlaticaSeleccionada() {
+      const db = obtenerDB();
+      const id = selectPlatica ? selectPlatica.value : '';
+      return (db.talks || []).find(talk => String(talk.id) === String(id)) || null;
+    }
+
+    function cargarPlaticas() {
+      const platicas = obtenerPlaticas();
+
+      if (!selectPlatica) return;
+
+      if (!platicas.length) {
+        selectPlatica.innerHTML = '<option value="">No hay pláticas creadas</option>';
+        selectPlatica.disabled = true;
+        mostrarResumen();
+        return;
+      }
+
+      const guardada = sessionStorage.getItem(SELECTED_TALK_KEY);
+      selectPlatica.disabled = false;
+      selectPlatica.innerHTML = '<option value="">Seleccione una plática</option>' + platicas.map(talk => {
+        const fecha = talk.date ? ` - ${formatearFecha(talk.date).split(',')[0]}` : '';
+        const texto = `${talk.title || 'Plática sin nombre'}${fecha}`;
+        return `<option value="${escaparHTML(talk.id)}" ${String(talk.id) === String(guardada) ? 'selected' : ''}>${escaparHTML(texto)}</option>`;
+      }).join('');
+
+      if (!selectPlatica.value && platicas[0]) {
+        selectPlatica.value = String(platicas[0].id);
+        sessionStorage.setItem(SELECTED_TALK_KEY, String(platicas[0].id));
+      }
+
+      mostrarResumen();
+    }
+
+    async function sincronizarAsistencia(asistencia) {
+      const config = window.SALUD_MENTAL_CONFIG || {};
+      const apiBaseUrl = String(config.apiBaseUrl || '').replace(/\/$/, '');
+      if (!apiBaseUrl) return;
+
+      try {
+        await fetch(apiBaseUrl + '/api/qr/asistencia', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ...asistencia,
+            registradoPorId: session ? session.id : null
+          })
+        });
+      } catch (error) {
+        console.warn('No se pudo sincronizar la asistencia QR con la nube:', error);
+      }
+    }
+
+    function asistenciasDePlatica(talk) {
+      if (!talk) return [];
+
+      const asistencias = obtenerAsistencias();
+      const titulo = normalizarTexto(talk.title || talk.platica || '');
+
+      return asistencias.filter(asistencia => {
+        const mismaPorId = String(asistencia.platicaId || '') === String(talk.id);
+        const mismaPorNombre = normalizarTexto(asistencia.platica || '') === titulo;
+        return mismaPorId || mismaPorNombre;
+      });
+    }
+
+    function construirListaAsistencia(talk) {
+      if (!talk) return [];
+
+      const db = obtenerDB();
+      const asistenciasQR = asistenciasDePlatica(talk);
+      const registros = Array.isArray(talk.registeredUsers) ? talk.registeredUsers : [];
+      const mapa = new Map();
+
+      registros.forEach(userId => {
+        const usuario = obtenerUsuarioPorId(db, userId);
+        const clave = String(userId || usuario?.matricula || usuario?.email || '').trim();
+
+        if (!clave) return;
+
+        mapa.set(clave, {
+          usuarioId: userId,
+          nombre: usuario?.name || 'Alumno registrado',
+          correo: usuario?.email || '',
+          matricula: usuario?.matricula || '',
+          carrera: usuario?.career || '',
+          grupo: usuario?.group || '',
+          semestre: usuario?.semester || '',
+          tutor: usuario?.tutor || '',
+          platicaId: talk.id,
+          platica: talk.title || '',
+          fechaQR: '',
+          metodo: 'Registro en plática'
+        });
+      });
+
+      asistenciasQR.forEach(asistencia => {
+        const clave = String(asistencia.usuarioId || asistencia.pacienteId || asistencia.matricula || asistencia.correo || asistencia.email || '').trim();
+
+        if (!clave) return;
+
+        const anterior = mapa.get(clave);
+
+        mapa.set(clave, {
+          usuarioId: asistencia.usuarioId || asistencia.pacienteId || anterior?.usuarioId || '',
+          nombre: asistencia.nombre || anterior?.nombre || '',
+          correo: asistencia.correo || asistencia.email || anterior?.correo || '',
+          matricula: asistencia.matricula || anterior?.matricula || '',
+          carrera: asistencia.carrera || anterior?.carrera || '',
+          grupo: asistencia.grupo || anterior?.grupo || '',
+          semestre: asistencia.semestre || anterior?.semestre || '',
+          tutor: asistencia.tutor || anterior?.tutor || '',
+          platicaId: talk.id,
+          platica: talk.title || asistencia.platica || '',
+          fechaQR: asistencia.fecha || anterior?.fechaQR || '',
+          metodo: anterior ? 'Registro + QR' : 'QR'
+        });
+      });
+
+      return Array.from(mapa.values()).sort((a, b) => String(a.nombre || '').localeCompare(String(b.nombre || ''), 'es'));
+    }
+
+    function mostrarResumen() {
+      if (!resumen) return;
+
+      const talk = obtenerPlaticaSeleccionada();
+
+      if (!talk) {
+        resumen.innerHTML = `
+          <h2>Resumen de asistencias</h2>
+          <p><strong>Total registrado:</strong> 0</p>
+          <div class="empty">Selecciona una plática para ver la lista.</div>
+        `;
+        return;
+      }
+
+      const lista = construirListaAsistencia(talk);
+
+      if (!lista.length) {
+        resumen.innerHTML = `
+          <h2>Resumen de asistencias</h2>
+          <p><strong>Plática:</strong> ${escaparHTML(talk.title || '')}</p>
+          <p><strong>Total registrado:</strong> 0</p>
+          <div class="empty">No hay alumnos registrados ni lecturas QR para esta plática.</div>
+        `;
+        return;
+      }
+
+      const filas = lista.map((item, index) => `
+        <tr>
+          <td>${index + 1}</td>
+          <td>${escaparHTML(item.nombre)}</td>
+          <td>${escaparHTML(item.matricula)}</td>
+          <td>${escaparHTML(item.carrera)}</td>
+          <td>${escaparHTML(item.grupo)}</td>
+          <td>${escaparHTML(item.semestre)}</td>
+          <td>${escaparHTML(item.metodo)}</td>
+          <td>${escaparHTML(formatearFecha(item.fechaQR))}</td>
+        </tr>
+      `).join('');
+
+      resumen.innerHTML = `
+        <h2>Resumen de asistencias</h2>
+        <p><strong>Plática:</strong> ${escaparHTML(talk.title || '')}</p>
+        <p><strong>Total registrado:</strong> ${lista.length}</p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Alumno</th>
+                <th>Matrícula</th>
+                <th>Carrera</th>
+                <th>Grupo</th>
+                <th>Semestre</th>
+                <th>Método</th>
+                <th>Fecha QR</th>
+              </tr>
+            </thead>
+            <tbody>${filas}</tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    function validarDatosQR(data) {
+      const tipoValido = data && (data.tipo === 'usuario' || data.tipo === 'asistencia');
+      const idValido = data && (data.usuarioId || data.pacienteId);
+      return tipoValido && idValido && data.nombre;
+    }
+
+    function registrarAsistencia(data) {
+      const talk = obtenerPlaticaSeleccionada();
+
+      if (!talk) {
+        resultado.className = 'notice unread';
+        resultado.innerHTML = '<strong>Falta seleccionar plática</strong><p>Selecciona una plática antes de leer el QR.</p>';
+        iniciarLector();
+        return;
+      }
+
+      const db = obtenerDB();
+      const asistencias = obtenerAsistencias();
+      const usuarioId = data.usuarioId || data.pacienteId;
+      const titulo = talk.title || '';
+
+      const yaTieneQR = asistencias.some(asistencia =>
+        String(asistencia.usuarioId || asistencia.pacienteId || '') === String(usuarioId) &&
+        String(asistencia.platicaId || '') === String(talk.id)
+      );
+
+      if (yaTieneQR) {
+        resultado.className = 'notice unread';
+        resultado.innerHTML = `
+          <strong>Asistencia duplicada</strong>
+          <p>${escaparHTML(data.nombre)} ya tiene lectura QR registrada para la plática: ${escaparHTML(titulo)}.</p>
+        `;
+        mostrarResumen();
+        return;
+      }
+
+      const asistencia = {
+        pacienteId: usuarioId,
+        usuarioId: usuarioId,
+        nombre: data.nombre || '',
+        correo: data.correo || data.email || '',
+        email: data.email || data.correo || '',
+        matricula: data.matricula || '',
+        carrera: data.carrera || '',
+        grupo: data.grupo || '',
+        semestre: data.semestre || '',
+        tutor: data.tutor || '',
+        platicaId: talk.id,
+        platica: titulo,
+        fecha: new Date().toISOString(),
+        registradoPor: session ? session.name : ''
+      };
+
+      asistencias.push(asistencia);
+      guardarAsistencias(asistencias);
+
+      const talkDb = (db.talks || []).find(item => String(item.id) === String(talk.id));
+      if (talkDb) {
+        talkDb.registeredUsers = talkDb.registeredUsers || [];
+        if (!talkDb.registeredUsers.some(id => String(id) === String(usuarioId))) {
+          const numericId = Number(usuarioId);
+          talkDb.registeredUsers.push(Number.isNaN(numericId) ? usuarioId : numericId);
+        }
+        guardarDB(db);
+      }
+
+      sincronizarAsistencia(asistencia);
+      mostrarResumen();
+
+      resultado.className = 'notice unread';
+      resultado.innerHTML = `
+        <strong>Asistencia registrada</strong>
+        <p>Alumno: ${escaparHTML(asistencia.nombre)}<br>
+        Matrícula: ${escaparHTML(asistencia.matricula || 'Sin matrícula')}<br>
+        Plática: ${escaparHTML(asistencia.platica)}</p>
+      `;
+    }
+
+    function procesarQR(textoQR) {
+      try {
+        const data = JSON.parse(textoQR);
+
+        if (!validarDatosQR(data)) {
+          resultado.className = 'notice unread';
+          resultado.innerHTML = '<strong>QR inválido</strong><p>El código leído no corresponde a un alumno válido.</p>';
+          return;
+        }
+
+        registrarAsistencia(data);
+      } catch (error) {
+        resultado.className = 'notice unread';
+        resultado.innerHTML = '<strong>Error de lectura</strong><p>No se pudo interpretar la información del código QR.</p>';
+      }
+    }
+
+    async function detenerLector() {
+      if (!html5QrCode || !escaneando) return;
+
+      try {
+        await html5QrCode.stop();
+        html5QrCode.clear();
+      } catch (error) {
+        console.warn('No se pudo detener el lector QR:', error);
+      } finally {
+        escaneando = false;
+      }
+    }
+
+    async function iniciarLector() {
+      if (!lector || typeof Html5Qrcode === 'undefined') {
+        resultado.className = 'notice unread';
+        resultado.innerHTML = '<strong>Error</strong><p>No se cargó la librería para leer códigos QR.</p>';
+        return;
+      }
+
+      await detenerLector();
+      lector.innerHTML = '';
+      html5QrCode = new Html5Qrcode('reader');
+
+      try {
+        await html5QrCode.start(
+          { facingMode: 'environment' },
+          { fps: 10, qrbox: { width: 250, height: 250 } },
+          async textoQR => {
+            await detenerLector();
+            procesarQR(textoQR);
+          }
+        );
+        escaneando = true;
+        if (resultado.classList.contains('empty')) {
+          resultado.textContent = 'Esperando lectura del código QR.';
+        }
+      } catch (error) {
+        escaneando = false;
+        resultado.className = 'notice unread';
+        resultado.innerHTML = `
+          <strong>Error</strong>
+          <p>No se pudo abrir la cámara. Revisa permisos o abre el sistema desde <strong>localhost</strong>.</p>
+        `;
+      }
+    }
+
+    function exportarExcel() {
+      const talk = obtenerPlaticaSeleccionada();
+
+      if (!talk) {
+        alert('Selecciona una plática antes de exportar.');
+        return;
+      }
+
+      const lista = construirListaAsistencia(talk);
+
+      if (!lista.length) {
+        alert('No hay datos para exportar.');
+        return;
+      }
+
+      const headers = ['ID', 'Nombre', 'Correo', 'Matrícula', 'Carrera', 'Grupo', 'Semestre', 'Tutor', 'Plática', 'Método', 'Fecha QR'];
+      const rows = lista.map((item, index) => ({
+        ID: index + 1,
+        Nombre: item.nombre || '',
+        Correo: item.correo || '',
+        Matrícula: item.matricula || '',
+        Carrera: item.carrera || '',
+        Grupo: item.grupo || '',
+        Semestre: item.semestre || '',
+        Tutor: item.tutor || '',
+        Plática: item.platica || '',
+        Método: item.metodo || '',
+        'Fecha QR': formatearFecha(item.fechaQR)
+      }));
+
+      const table = `
+        <table>
+          <thead>
+            <tr>${headers.map(header => `<th>${escaparHTML(header)}</th>`).join('')}</tr>
+          </thead>
+          <tbody>
+            ${rows.map(row => `<tr>${headers.map(header => `<td>${escaparHTML(row[header] ?? '')}</td>`).join('')}</tr>`).join('')}
+          </tbody>
+        </table>
+      `;
+
+      const html = `<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>${table}</body></html>`;
+      const blob = new Blob([html], { type: 'application/vnd.ms-excel;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      const safeTitle = normalizarTexto(talk.title || 'platica').replace(/\s+/g, '_') || 'platica';
+
+      link.href = url;
+      link.download = `asistencia_${safeTitle}.xls`;
+      link.click();
+
+      URL.revokeObjectURL(url);
+    }
+
+    btnLeerOtro.addEventListener('click', () => {
+      resultado.className = 'empty';
+      resultado.textContent = 'Esperando lectura del código QR.';
+      iniciarLector();
+    });
+
+    btnExportarExcel.addEventListener('click', exportarExcel);
+
+    btnLimpiarLecturas.addEventListener('click', async () => {
+      const talk = obtenerPlaticaSeleccionada();
+
+      if (!talk) {
+        alert('Selecciona una plática antes de limpiar lecturas.');
+        return;
+      }
+
+      const confirmar = confirm('¿Deseas limpiar solo las lecturas QR de esta plática? Los registros hechos desde Pláticas se conservarán.');
+      if (!confirmar) return;
+
+      const asistencias = obtenerAsistencias();
+      const filtradas = asistencias.filter(asistencia => String(asistencia.platicaId || '') !== String(talk.id));
+      guardarAsistencias(filtradas);
+
+      mostrarResumen();
+      resultado.className = 'empty';
+      resultado.textContent = 'Lecturas QR limpiadas. Puedes leer otro código.';
+      await iniciarLector();
+    });
+
+    selectPlatica.addEventListener('change', () => {
+      sessionStorage.setItem(SELECTED_TALK_KEY, String(selectPlatica.value || ''));
+      mostrarResumen();
+    });
+
+    document.addEventListener('DOMContentLoaded', () => {
+      cargarPlaticas();
+      iniciarLector();
+    });
+  </script>
+</body>
+
+</html>

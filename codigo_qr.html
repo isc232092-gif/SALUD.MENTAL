@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Código QR - Alumno</title>
+
+  <link rel="stylesheet" href="assets/css/styles.css" />
+</head>
+
+<body data-page="qr" data-role="paciente">
+  <div id="app"></div>
+
+  <!-- Librería para generar QR -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+
+  <!-- Configuración del sistema -->
+  <script src="assets/js/config.js"></script>
+
+  <!-- JS principal del sistema -->
+  <script src="assets/js/app.js"></script>
+
+  <!-- Refuerzo para generar QR aunque app.js no lo pinte correctamente -->
+  <script>
+    (function () {
+      'use strict';
+
+      const SESSION_KEY = 'saludMentalSession_v1';
+      const APP_KEY = 'saludMentalDemoDB_v3';
+
+      function getSession() {
+        return JSON.parse(sessionStorage.getItem(SESSION_KEY) || 'null');
+      }
+
+      function getDB() {
+        return JSON.parse(localStorage.getItem(APP_KEY) || '{}');
+      }
+
+      function escapeHtml(value) {
+        return String(value ?? '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#039;');
+      }
+
+      function getStudent(session, db) {
+        return (db.users || []).find(user =>
+          Number(user.id) === Number(session.id) ||
+          String(user.email || '').toLowerCase() === String(session.email || '').toLowerCase()
+        );
+      }
+
+      function buildQRData(student) {
+        return {
+          tipo: 'usuario',
+          usuarioId: student.id,
+          pacienteId: student.id,
+          nombre: student.name || '',
+          correo: student.email || '',
+          email: student.email || '',
+          matricula: student.matricula || '',
+          carrera: student.career || '',
+          grupo: student.group || '',
+          semestre: student.semester || '',
+          tutor: student.tutor || '',
+          fechaGeneracion: new Date().toISOString()
+        };
+      }
+
+      function showMessage(container, data) {
+        const info = document.createElement('div');
+        info.className = 'notice';
+        info.style.marginTop = '1rem';
+        info.innerHTML = `
+          <strong>QR generado correctamente</strong>
+          <p>
+            Alumno: ${escapeHtml(data.nombre)}<br>
+            Matrícula: ${escapeHtml(data.matricula || 'Sin matrícula')}<br>
+            Carrera: ${escapeHtml(data.carrera || 'Sin carrera')}
+          </p>
+        `;
+        container.appendChild(info);
+      }
+
+      function generarQR() {
+        const container = document.getElementById('qrContainer') || document.getElementById('qr');
+
+        if (!container) {
+          alert('No se encontró el contenedor del QR.');
+          return;
+        }
+
+        const session = getSession();
+        const db = getDB();
+
+        if (!session) {
+          alert('No hay sesión activa. Inicia sesión como estudiante.');
+          return;
+        }
+
+        if (session.role !== 'paciente') {
+          alert('Solo el estudiante puede generar su código QR.');
+          return;
+        }
+
+        const student = getStudent(session, db);
+
+        if (!student) {
+          alert('No se encontró la información del estudiante.');
+          return;
+        }
+
+        const data = buildQRData(student);
+        const qrText = JSON.stringify(data);
+
+        container.innerHTML = '';
+
+        if (typeof QRCode !== 'undefined') {
+          new QRCode(container, {
+            text: qrText,
+            width: 250,
+            height: 250,
+            colorDark: '#0F2040',
+            colorLight: '#ffffff',
+            correctLevel: QRCode.CorrectLevel.H
+          });
+
+          showMessage(container, data);
+          return;
+        }
+
+        const img = document.createElement('img');
+        img.alt = 'Código QR del alumno';
+        img.style.width = '250px';
+        img.style.height = '250px';
+        img.style.display = 'block';
+        img.style.margin = '0 auto';
+        img.src = 'https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=' + encodeURIComponent(qrText);
+
+        img.onerror = function () {
+          container.innerHTML = `
+            <div class="notice unread">
+              <strong>No se pudo generar la imagen QR</strong>
+              <p>Revisa tu conexión a internet. Estos son los datos que debería contener el QR:</p>
+              <textarea readonly style="width:100%;min-height:150px;margin-top:10px;">${escapeHtml(qrText)}</textarea>
+            </div>
+          `;
+        };
+
+        container.appendChild(img);
+        showMessage(container, data);
+      }
+
+      document.addEventListener('click', function (event) {
+        const btn = event.target.closest('#btnGenerarQR, #btnQR');
+
+        if (!btn) return;
+
+        event.preventDefault();
+
+        setTimeout(generarQR, 100);
+      });
+    })();
+  </script>
+</body>
+
+</html>

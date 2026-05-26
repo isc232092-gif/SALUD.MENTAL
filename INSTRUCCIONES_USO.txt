@@ -1,0 +1,29 @@
+INSTRUCCIONES DE USO
+
+1. Abre una terminal dentro de esta carpeta.
+2. Ejecuta:
+   python -m http.server 5500
+
+   Si no funciona, usa:
+   py -m http.server 5500
+
+3. Abre el navegador en:
+   http://localhost:5500/login.html
+
+4. Accesos de prueba:
+   Administrador: admin@salud.local / admin123
+   Psicólogo: psicologo@salud.local / psico123
+   Paciente: paciente@salud.local / paciente123
+
+5. Flujo QR:
+   - Entra como paciente y ve a "Mi código QR".
+   - Genera el QR del estudiante.
+   - Entra como psicólogo y abre "Lector QR".
+   - Escribe la plática manualmente.
+   - Escanea el QR del alumno.
+   - Usa "Leer otro código" para registrar otro alumno.
+   - Usa "Limpiar lecturas" para borrar la lista de asistencias.
+
+NOTA:
+La cámara no suele funcionar si abres lector_qr.html directamente con file://.
+Usa http://localhost:5500/ para evitar el error de permisos de cámara.

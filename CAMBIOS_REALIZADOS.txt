@@ -1,0 +1,37 @@
+CAMBIOS REALIZADOS EN ESTA VERSION OPTIMIZADA
+
+1. Arquitectura preparada para Antigravity:
+   Frontend HTML/CSS/JS -> API Node.js -> SQL Server en nube.
+
+2. Se agregó backend:
+   server/index.js
+   server/db.js
+
+3. Se agregó configuración:
+   package.json
+   .env.example
+   .gitignore
+   assets/js/config.js
+
+4. Se agregó script SQL Server:
+   sql/SaludMentalDB_cloud.sql
+
+5. Se corrigió expediente de paciente:
+   paciente/expediente.html queda como rol paciente.
+
+6. Se reforzó validación de citas:
+   Solo fecha actual en adelante.
+   Si es hoy, la hora debe ser futura.
+
+7. Se reforzó validación de usuarios:
+   Correo institucional para pacientes.
+   Contraseña fuerte obligatoria para usuarios nuevos.
+   Se eliminó la contraseña por defecto 123456.
+
+8. Se ajustó SQL Server:
+   Se cambió la matrícula única a índice filtrado para permitir usuarios sin matrícula.
+   Esto evita conflicto con administradores y psicólogos.
+
+9. Se mantiene respaldo localStorage:
+   Si la API falla, la interfaz no se cae.
+   Para demostrar BD real, validar siempre /api/health y consultar SSMS 21.

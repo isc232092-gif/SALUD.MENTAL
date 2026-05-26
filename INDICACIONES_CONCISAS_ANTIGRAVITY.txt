@@ -1,0 +1,89 @@
+SISTEMA DE SALUD MENTAL - RUTA RECOMENDADA PARA ENTREGA
+Antigravity local + API Node.js + SQL Server en la nube + SSMS 21
+
+OBJETIVO
+Ejecutar el sistema desde Antigravity usando una API Node.js y una base SQL Server en la nube. El frontend conserva localStorage como respaldo para que la demo no se caiga si la API falla.
+
+1) CREAR LA BASE EN LA NUBE
+- Usa un servicio compatible con SQL Server.
+- No uses MySQL, PostgreSQL ni Firebase con este paquete porque el script es Transact-SQL.
+- Crea una base llamada: SaludMentalDB
+
+2) EJECUTAR EL SCRIPT SQL
+- Abre SSMS 21.
+- Conéctate al servidor SQL Server en la nube.
+- Selecciona la base SaludMentalDB.
+- Ejecuta el archivo:
+  sql/SaludMentalDB_cloud.sql
+- Verifica que se creen tablas como Usuarios, Roles, Citas, Expedientes, TestAplicaciones, AsistenciasQR, ValidacionTokens.
+
+3) CONFIGURAR VARIABLES DE ENTORNO
+- Copia el archivo .env.example y renómbralo como .env
+- Llena tus datos reales:
+  PORT=3000
+  DB_SERVER=tu-servidor.database.windows.net
+  DB_PORT=1433
+  DB_NAME=SaludMentalDB
+  DB_USER=tu_usuario
+  DB_PASSWORD=tu_password
+  DB_ENCRYPT=true
+  DB_TRUST_SERVER_CERTIFICATE=false
+- No subas el archivo .env a GitHub.
+
+4) EJECUTAR EN ANTIGRAVITY
+- Abre la carpeta del proyecto en Antigravity.
+- En la terminal ejecuta:
+  npm install
+  npm run dev
+- Abre el sistema en:
+  http://localhost:3000/login.html
+- No lo abras con doble clic ni con file://
+
+5) VERIFICAR LA API
+- Abre en el navegador:
+  http://localhost:3000/api/health
+- Resultado esperado:
+  {"ok":true,"database":"SaludMentalDB"}
+- Si falla, revisa .env, firewall del servidor SQL, usuario, contraseña y puerto 1433.
+
+6) USUARIOS DEMO
+Administrador:
+  correo: admin@salud.local
+  contraseña: Admin2026@
+Psicólogo:
+  correo: psicologo@salud.local
+  contraseña: Psico2026@
+Paciente:
+  correo: isc232092@itsatlixco.edu.mx
+  contraseña: Paciente2026@
+
+7) PRUEBAS MINIMAS PARA LA ENTREGA
+- Iniciar sesión como administrador.
+- Revisar dashboard.
+- Crear usuario con contraseña fuerte.
+- Intentar crear usuario con contraseña débil y verificar que se rechaza.
+- Registrar cita con fecha futura.
+- Intentar registrar cita en fecha pasada y verificar que se bloquea.
+- Entrar como paciente y revisar expediente.
+- Entrar como psicólogo y revisar expedientes/reportes.
+- Probar generación y lectura QR desde localhost.
+- Revisar en SSMS 21 que existan registros en la base.
+
+8) VALIDACIONES IMPLEMENTADAS
+- Citas: no permite fechas pasadas ni horas anteriores si la cita es del día actual.
+- Correo paciente: matrícula + @itsatlixco.edu.mx
+- Contraseña: mínimo 8 caracteres, mayúscula, minúscula, número y símbolo.
+- Base de datos: incluye funciones de validación por patrones y tabla ValidacionTokens.
+
+9) IMPORTANTE
+- Antigravity se usa para ejecutar/desarrollar el proyecto.
+- SQL Server en la nube es la base real.
+- SSMS 21 se usa para administrar y verificar la base.
+- El navegador nunca se conecta directo a SQL Server; siempre pasa por la API Node.js.
+- Vercel/GitHub puede usarse después, pero para esta entrega la ruta segura es Antigravity local + SQL Server nube.
+
+10) SI ALGO FALLA
+- Si /api/health falla: problema de conexión a la BD o .env.
+- Si login falla: verifica que el script SQL insertó los usuarios demo.
+- Si QR falla: abre desde http://localhost:3000, permite cámara y usa internet para cargar librerías CDN.
+- Si citas no se guardan en BD: revisa la consola de Antigravity y la respuesta de /api/health.

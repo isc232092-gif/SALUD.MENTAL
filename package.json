@@ -1,0 +1,18 @@
+{
+  "name": "sistema-salud-mental-antigravity",
+  "version": "1.0.0",
+  "description": "Sistema de salud mental con frontend estático y API Node.js para SQL Server en la nube.",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node server/index.js",
+    "check": "node --check server/index.js && node --check assets/js/app.js"
+  },
+  "dependencies": {
+    "@vercel/speed-insights": "^2.0.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "pg": "^8.11.3"
+  }
+}
